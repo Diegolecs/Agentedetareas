@@ -1,0 +1,10 @@
+{
+  "name": "Asistente Personal Inteligente",
+  "description": "Asistente personal inteligente con calendario interactivo, sistema de tareas y memoria contextual persistente.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
