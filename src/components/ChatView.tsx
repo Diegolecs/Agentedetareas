@@ -68,20 +68,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
     };
   }, []);
 
-  const handleToggleSpeech = (msgId: string, content: string) => {
+  const handleToggleSpeech = async (msgId: string, content: string) => {
     if (speakingMsgId === msgId) {
       audioService.stopSpeaking();
       setSpeakingMsgId(null);
     } else {
       audioService.stopSpeaking();
-      const ok = audioService.speakText(
+      setSpeakingMsgId(msgId);
+      const ok = await audioService.speakText(
         content,
         () => setSpeakingMsgId(msgId),
         () => setSpeakingMsgId(null),
         () => setSpeakingMsgId(null)
       );
-      if (ok) {
-        setSpeakingMsgId(msgId);
+      if (!ok) {
+        setSpeakingMsgId(null);
       }
     }
   };
@@ -152,6 +153,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ...interimState,
         events: response.updatedState?.events || interimState.events,
         tasks: response.updatedState?.tasks || interimState.tasks,
+        reminders: response.updatedState?.reminders || interimState.reminders || [],
         people: response.updatedState?.people || interimState.people,
         projects: response.updatedState?.projects || interimState.projects,
         places: response.updatedState?.places || interimState.places,

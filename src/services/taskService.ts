@@ -1,4 +1,5 @@
 import { Task, TaskPriority, TaskStatus, ActionHistoryItem } from '../types';
+import { getDeviceLocalDate } from '../utils/deviceDateTime';
 
 export const COMPLETED_RETENTION_DAYS = 30;
 
@@ -166,7 +167,7 @@ export class TaskService {
    */
   static isRecentlyCompleted(
     task: Task,
-    referenceDate = '2026-09-15',
+    referenceDate = getDeviceLocalDate(),
     retentionDays = COMPLETED_RETENTION_DAYS
   ): boolean {
     if (task.status !== 'completada') return false;
@@ -190,7 +191,7 @@ export class TaskService {
   static archiveCompletedTasks(
     tasks: Task[],
     actionHistory: ActionHistoryItem[] = [],
-    referenceDate = '2026-09-15',
+    referenceDate = getDeviceLocalDate(),
     archiveAllCompleted = false,
     retentionDays = COMPLETED_RETENTION_DAYS
   ): {

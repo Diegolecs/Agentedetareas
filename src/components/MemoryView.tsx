@@ -146,23 +146,23 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-y-auto">
+    <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-y-auto w-full max-w-full">
       {/* Top Bar */}
-      <div className="p-4 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-xs sticky top-0 z-10 space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <FolderGit2 className="w-5 h-5 text-indigo-400" />
-              Memoria Contextual Persistente
+      <div className="p-3.5 sm:p-4 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-xs sticky top-0 z-10 space-y-3 w-full">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="min-w-0">
+            <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <FolderGit2 className="w-5 h-5 text-indigo-400 shrink-0" />
+              <span className="truncate">Memoria Contextual</span>
             </h2>
-            <p className="text-xs text-slate-400">
-              Personas, proyectos, acuerdos y grafo de relaciones interconectadas
+            <p className="text-xs text-slate-400 mt-0.5">
+              Personas, proyectos, acuerdos y relaciones interconectadas
             </p>
           </div>
           <button
             onClick={() => setIsModalOpen(true)}
             id="btn-add-memory"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition shadow-sm active:scale-95"
+            className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition shadow-sm active:scale-95 shrink-0"
           >
             <Plus className="w-4 h-4" />
             <span>Nuevo Registro</span>
@@ -170,11 +170,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
         </div>
 
         {/* Search Bar */}
-        <div className="relative">
+        <div className="relative w-full">
           <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-500" />
           <input
             type="text"
-            placeholder="Buscar personas, compromisos, departamentos, lugares o notas..."
+            placeholder="Buscar personas, compromisos, departamentos..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:ring-1 focus:ring-indigo-500"
@@ -182,7 +182,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
         </div>
 
         {/* Subtabs Bar */}
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 max-w-full">
           <button
             onClick={() => setActiveSubTab('personas')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition shrink-0 ${

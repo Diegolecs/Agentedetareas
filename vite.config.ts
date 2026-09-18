@@ -11,7 +11,11 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg', 'sw-push.js'],
+        workbox: {
+          importScripts: ['/sw-push.js'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        },
         manifest: {
           id: '/',
           name: 'Asistente Personal Inteligente',
@@ -44,7 +48,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: process.env.DISABLE_HMR !== 'true',
           type: 'module',
         },
       }),

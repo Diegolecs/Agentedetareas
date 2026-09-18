@@ -3,6 +3,8 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
+import { pushService } from './server/pushService';
 
 dotenv.config();
 
@@ -252,7 +254,7 @@ const toolDeclarations: FunctionDeclaration[] = [
       properties: {
         title: { type: Type.STRING, description: 'Título de la tarea (ej. "Llamar al propietario", "Enviar documentos a Pedro")' },
         description: { type: Type.STRING, description: 'Detalle o descripción de la tarea' },
-        dueDate: { type: Type.STRING, description: 'Fecha límite en formato YYYY-MM-DD o descripción de plazo (ej. "2026-09-16", "esta semana")' },
+        dueDate: { type: Type.STRING, description: 'Fecha límite en formato YYYY-MM-DD o descripción de plazo (ej. "YYYY-MM-DD", "hoy", "mañana", "esta semana")' },
         dueTime: { type: Type.STRING, description: 'Hora específica de la tarea o recordatorio (ej. "14:00")' },
         priority: { type: Type.STRING, description: 'Prioridad: "alta", "media", "baja"' },
         status: { type: Type.STRING, description: 'Estado: "pendiente", "en_progreso", "completada", "en_espera"' },
@@ -327,6 +329,58 @@ const toolDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'create_reminder',
+    description: 'Crea y programa un recordatorio con fecha y hora exacta en el sistema. Debe llamarse SIEMPRE que el usuario pida un recordatorio o aviso temporal. Registra el aviso con entrega sonora, visual y notificación del sistema.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: 'Título o mensaje del recordatorio (ej. "Llamar a Juan", "Reunión de seguimiento")' },
+        scheduledTime: { type: Type.STRING, description: 'Fecha y hora exacta en formato ISO 8601 (ej. "YYYY-MM-DDTHH:mm:ss") o "YYYY-MM-DD HH:mm"' },
+        relatedTaskId: { type: Type.STRING, description: 'ID de la tarea vinculada si el recordatorio corresponde a una tarea' },
+        relatedEventId: { type: Type.STRING, description: 'ID del evento del calendario vinculado si es recordatorio de una reunión o evento' },
+        notes: { type: Type.STRING, description: 'Detalles o notas adicionales' },
+      },
+      required: ['title', 'scheduledTime'],
+    },
+  },
+  {
+    name: 'update_reminder',
+    description: 'Modifica o reprograma un recordatorio existente cambiando su hora, fecha o título. Se reprogramará la notificación real en el dispositivo.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING, description: 'ID del recordatorio si se conoce' },
+        titleMatch: { type: Type.STRING, description: 'Palabras clave o título para encontrar el recordatorio existente' },
+        newScheduledTime: { type: Type.STRING, description: 'Nueva fecha y hora en formato ISO 8601 o "YYYY-MM-DD HH:mm"' },
+        newTitle: { type: Type.STRING, description: 'Nuevo título si se desea cambiar' },
+        notes: { type: Type.STRING, description: 'Nuevas notas o detalles' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'cancel_reminder',
+    description: 'Cancela un recordatorio específico y anula su notificación programada en el dispositivo.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING, description: 'ID del recordatorio si se conoce' },
+        titleMatch: { type: Type.STRING, description: 'Palabras clave o título del recordatorio a cancelar (ej. "llamar a Juan")' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_reminders',
+    description: 'Consulta los recordatorios activos y programados en el dispositivo del usuario.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        filter: { type: Type.STRING, description: 'Filtro opcional: "hoy", "pendientes", "todos"' },
+      },
+    },
+  },
+  {
     name: 'create_or_update_memory',
     description: 'Guarda o actualiza información importante en la memoria contextual a largo plazo (preferencias, detalles de clientes, decisiones, qué llevar a una reunión, etc.).',
     parameters: {
@@ -394,6 +448,7 @@ const toolDeclarations: FunctionDeclaration[] = [
 function formatDisplayDate(isoString: string): string {
   try {
     const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
     const day = String(d.getDate()).padStart(2, '0');
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const year = d.getFullYear();
@@ -405,8 +460,82 @@ function formatDisplayDate(isoString: string): string {
   }
 }
 
+// Helper to shift a YYYY-MM-DD date by days
+function getShiftedDate(dateStr: string, days: number): string {
+  try {
+    const parts = dateStr.split('-');
+    const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    d.setDate(d.getDate() + days);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch {
+    return dateStr;
+  }
+}
+
+// Helper to get Spanish weekday name
+function getWeekdayFromDate(dateStr: string): string {
+  try {
+    const weekdays = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const parts = dateStr.split('-');
+    const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    return weekdays[d.getDay()] || 'Hoy';
+  } catch {
+    return 'Hoy';
+  }
+}
+
+// Helper to normalize any scheduledTime string with device date and timezone offset
+function normalizeScheduledTime(
+  rawTime: string,
+  tzOffset = '-05:00',
+  defaultDate = '2026-09-18'
+): string {
+  if (!rawTime) return new Date().toISOString();
+  let cleaned = rawTime.trim();
+
+  // If only time is provided (e.g. "14:30" or "14:30:00")
+  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(cleaned)) {
+    const parts = cleaned.split(':');
+    const hh = parts[0].padStart(2, '0');
+    const mm = parts[1].padStart(2, '0');
+    const ss = parts[2] ? parts[2].padStart(2, '0') : '00';
+    return `${defaultDate}T${hh}:${mm}:${ss}${tzOffset}`;
+  }
+
+  // Replace space with T
+  if (cleaned.includes(' ') && !cleaned.includes('T')) {
+    cleaned = cleaned.replace(' ', 'T');
+  }
+
+  // If missing seconds
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(cleaned)) {
+    cleaned += ':00';
+  }
+
+  // If no timezone offset is attached, attach the user device's timezone offset
+  const hasTimezone = /([Zz]|[+-]\d{2}:\d{2})$/.test(cleaned);
+  if (!hasTimezone) {
+    return `${cleaned}${tzOffset}`;
+  }
+
+  return cleaned;
+}
+
 // Helper to execute tool calls on backend state copy
-function executeTool(call: { name: string; args: any }, state: any) {
+function executeTool(
+  call: { name: string; args: any },
+  state: any,
+  timeContext?: {
+    currentDate?: string;
+    currentTime?: string;
+    timezoneOffset?: string;
+    tomorrowDate?: string;
+    yesterdayDate?: string;
+  }
+) {
   const { name, args } = call;
   const actions: Array<{ type: any; label: string; details: string }> = [];
   const currentUserId = state.userId || 'usr-diego-default';
@@ -446,11 +575,22 @@ function executeTool(call: { name: string; args: any }, state: any) {
   switch (name) {
     case 'create_calendar_event': {
       const id = `evt-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      let evDate = args.date || timeContext?.currentDate || '2026-09-18';
+      if (typeof evDate === 'string') {
+        const lower = evDate.toLowerCase().trim();
+        if (lower === 'hoy' || lower === 'today') {
+          evDate = timeContext?.currentDate || evDate;
+        } else if (lower === 'mañana' || lower === 'tomorrow') {
+          evDate = timeContext?.tomorrowDate || evDate;
+        } else if (lower === 'ayer' || lower === 'yesterday') {
+          evDate = timeContext?.yesterdayDate || evDate;
+        }
+      }
       const newEv = {
         id,
         userId: currentUserId,
         title: args.title,
-        date: args.date,
+        date: evDate,
         startTime: args.startTime,
         endTime: args.endTime || '17:00',
         location: args.location || '',
@@ -631,12 +771,23 @@ function executeTool(call: { name: string; args: any }, state: any) {
 
     case 'create_task': {
       const id = `tsk-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      let tDueDate = args.dueDate || '';
+      if (typeof tDueDate === 'string') {
+        const lower = tDueDate.toLowerCase().trim();
+        if (lower === 'hoy' || lower === 'today') {
+          tDueDate = timeContext?.currentDate || tDueDate;
+        } else if (lower === 'mañana' || lower === 'tomorrow') {
+          tDueDate = timeContext?.tomorrowDate || tDueDate;
+        } else if (lower === 'ayer' || lower === 'yesterday') {
+          tDueDate = timeContext?.yesterdayDate || tDueDate;
+        }
+      }
       const newTask = {
         id,
         userId: currentUserId,
         title: args.title,
         description: args.description || '',
-        dueDate: args.dueDate || '',
+        dueDate: tDueDate,
         dueTime: args.dueTime || '',
         priority: args.priority || 'media',
         status: args.status || 'pendiente',
@@ -971,6 +1122,191 @@ function executeTool(call: { name: string; args: any }, state: any) {
       return { success: true, relationship: newRel, actions };
     }
 
+    case 'create_reminder': {
+      if (!state.reminders) {
+        state.reminders = [];
+      }
+
+      const scheduledTime = normalizeScheduledTime(
+        args.scheduledTime || '',
+        timeContext?.timezoneOffset || '-05:00',
+        timeContext?.currentDate || '2026-09-18'
+      );
+
+      const isPermGranted = state.notificationPermission === 'granted';
+      const isIframe = !!state.isInIframe;
+
+      const id = `rem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const newRem = {
+        id,
+        userId: currentUserId,
+        title: args.title,
+        scheduledTime,
+        displayTime: formatDisplayDate(scheduledTime),
+        status: 'scheduled',
+        taskId: args.relatedTaskId || undefined,
+        eventId: args.relatedEventId || undefined,
+        notes: args.notes || '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      state.reminders.push(newRem);
+
+      // Program backend Web Push scheduler
+      pushService.scheduleReminder({
+        id: newRem.id,
+        userId: currentUserId,
+        title: newRem.title,
+        body: newRem.notes || 'Es hora de atender este recordatorio programado.',
+        scheduledTime: newRem.scheduledTime,
+      });
+
+      actions.push({
+        type: 'create_reminder',
+        label: `Recordatorio programado: ${newRem.title}`,
+        details: `${newRem.displayTime}${isPermGranted ? ' • Notificación SO activa' : ' • Aviso programado'}`,
+      });
+
+      recordHistory({
+        actionType: 'create_reminder',
+        entity: 'reminder',
+        entityId: id,
+        readableDescription: `Recordatorio programado: "${newRem.title}" para ${newRem.displayTime}`,
+        previousState: {},
+        newState: { reminders: [newRem] },
+      });
+
+      return {
+        success: true,
+        reminderId: id,
+        reminder: newRem,
+        actions,
+        notificationPermission: state.notificationPermission || 'default',
+        isInIframe: isIframe,
+        deliveryMode: isPermGranted ? 'os_and_in_app' : 'in_app_audio',
+      };
+    }
+
+    case 'update_reminder': {
+      if (!state.reminders) {
+        state.reminders = [];
+      }
+      let matchedRem: any = null;
+      let prevRem: any = null;
+
+      for (const rem of state.reminders) {
+        if (
+          (!rem.userId || rem.userId === currentUserId) &&
+          ((args.id && rem.id === args.id) ||
+            (args.titleMatch && rem.title.toLowerCase().includes(args.titleMatch.toLowerCase())))
+        ) {
+          prevRem = JSON.parse(JSON.stringify(rem));
+          if (args.newScheduledTime) {
+            const newTime = normalizeScheduledTime(
+              args.newScheduledTime,
+              timeContext?.timezoneOffset || '-05:00',
+              timeContext?.currentDate || '2026-09-18'
+            );
+            rem.scheduledTime = newTime;
+            rem.displayTime = formatDisplayDate(newTime);
+            rem.status = 'scheduled';
+          }
+          if (args.newTitle) rem.title = args.newTitle;
+          if (args.notes !== undefined) rem.notes = args.notes;
+          rem.updatedAt = new Date().toISOString();
+          matchedRem = rem;
+          break;
+        }
+      }
+
+      if (matchedRem) {
+        if (matchedRem.status === 'scheduled') {
+          pushService.scheduleReminder({
+            id: matchedRem.id,
+            userId: currentUserId,
+            title: matchedRem.title,
+            body: matchedRem.notes || 'Es hora de atender este recordatorio programado.',
+            scheduledTime: matchedRem.scheduledTime,
+          });
+        }
+
+        actions.push({
+          type: 'update_reminder',
+          label: `Recordatorio reprogramado: ${matchedRem.title}`,
+          details: `Nueva hora: ${matchedRem.displayTime}`,
+        });
+
+        recordHistory({
+          actionType: 'update_reminder',
+          entity: 'reminder',
+          entityId: matchedRem.id,
+          readableDescription: `Recordatorio reprogramado: "${matchedRem.title}" para ${matchedRem.displayTime}`,
+          previousState: { reminders: [prevRem] },
+          newState: { reminders: [JSON.parse(JSON.stringify(matchedRem))] },
+        });
+
+        return { success: true, reminder: matchedRem, actions };
+      }
+
+      return { success: false, message: 'Recordatorio no encontrado para modificar', actions };
+    }
+
+    case 'cancel_reminder': {
+      if (!state.reminders) {
+        state.reminders = [];
+      }
+      let matchedRem: any = null;
+      let prevRem: any = null;
+
+      for (const rem of state.reminders) {
+        if (
+          (!rem.userId || rem.userId === currentUserId) &&
+          ((args.id && rem.id === args.id) ||
+            (args.titleMatch && rem.title.toLowerCase().includes(args.titleMatch.toLowerCase())))
+        ) {
+          prevRem = JSON.parse(JSON.stringify(rem));
+          rem.status = 'cancelled';
+          rem.updatedAt = new Date().toISOString();
+          matchedRem = rem;
+          break;
+        }
+      }
+
+      if (matchedRem) {
+        pushService.cancelReminder(matchedRem.id);
+
+        actions.push({
+          type: 'cancel_reminder',
+          label: `Recordatorio cancelado: ${matchedRem.title}`,
+          details: 'Notificación anulada en el dispositivo',
+        });
+
+        recordHistory({
+          actionType: 'cancel_reminder',
+          entity: 'reminder',
+          entityId: matchedRem.id,
+          readableDescription: `Recordatorio cancelado: "${matchedRem.title}" (${matchedRem.displayTime})`,
+          previousState: { reminders: [prevRem] },
+          newState: { reminders: [JSON.parse(JSON.stringify(matchedRem))] },
+        });
+
+        return { success: true, cancelled: matchedRem, actions };
+      }
+
+      return { success: false, message: 'Recordatorio no encontrado para cancelar', actions };
+    }
+
+    case 'list_reminders': {
+      if (!state.reminders) {
+        state.reminders = [];
+      }
+      const active = state.reminders.filter(
+        (r: any) => (!r.userId || r.userId === currentUserId) && r.status === 'scheduled'
+      );
+      return { success: true, count: active.length, reminders: active, actions };
+    }
+
     default:
       return { success: false, message: `Herramienta desconocida ${name}`, actions: [] };
   }
@@ -985,8 +1321,24 @@ app.post('/api/chat', async (req, res) => {
     }
 
     const ai = getGenAI();
-    const currentDate = context?.currentDate || '2026-09-15';
-    const currentTime = context?.currentTime || '11:30';
+    const nowServer = new Date();
+    const currentDate = context?.currentDate || nowServer.toISOString().split('T')[0];
+    const currentTime = context?.currentTime || `${String(nowServer.getHours()).padStart(2, '0')}:${String(nowServer.getMinutes()).padStart(2, '0')}`;
+    const currentTimezone = context?.timezone || 'America/Lima';
+    const currentTimezoneOffset = context?.timezoneOffset || '-05:00';
+    const currentIso = context?.currentIso || nowServer.toISOString();
+    const currentWeekday = context?.weekday || getWeekdayFromDate(currentDate);
+    const formattedDate = context?.formattedDate || currentDate;
+    const tomorrowDate = context?.tomorrowDate || getShiftedDate(currentDate, 1);
+    const yesterdayDate = context?.yesterdayDate || getShiftedDate(currentDate, -1);
+
+    const timeContext = {
+      currentDate,
+      currentTime,
+      timezoneOffset: currentTimezoneOffset,
+      tomorrowDate,
+      yesterdayDate,
+    };
 
     // Clone context state to mutate during tool execution
     const currentUserId = context?.userId || 'usr-diego-default';
@@ -994,24 +1346,41 @@ app.post('/api/chat', async (req, res) => {
       userId: currentUserId,
       events: context?.events ? JSON.parse(JSON.stringify(context.events)) : [],
       tasks: context?.tasks ? JSON.parse(JSON.stringify(context.tasks)) : [],
+      reminders: context?.reminders ? JSON.parse(JSON.stringify(context.reminders)) : [],
       people: context?.people ? JSON.parse(JSON.stringify(context.people)) : [],
       projects: context?.projects ? JSON.parse(JSON.stringify(context.projects)) : [],
       places: context?.places ? JSON.parse(JSON.stringify(context.places)) : [],
       memories: context?.memories ? JSON.parse(JSON.stringify(context.memories)) : [],
       relationships: context?.relationships ? JSON.parse(JSON.stringify(context.relationships)) : [],
       actionHistory: context?.actionHistory ? JSON.parse(JSON.stringify(context.actionHistory)) : [],
+      notificationPermission: context?.notificationPermission || 'default',
+      isInIframe: !!context?.isInIframe,
     };
 
     const systemInstruction = `
 Eres el Asistente Personal Inteligente del usuario. Tu función principal es escuchar o leer las palabras del usuario en lenguaje natural cotidiano, comprender todo el contexto implícito y explícito, y organizar su agenda, tareas, recordatorios y memoria persistente.
 
-FECHA ACTUAL DE REFERENCIA: ${currentDate} (Martes, 15 de Septiembre de 2026).
-HORA ACTUAL: ${currentTime}.
+FECHA Y HORA DEL DISPOSITIVO DEL USUARIO (CELULAR):
+- FECHA ACTUAL DEL CELULAR: ${currentDate} (${currentWeekday}, ${formattedDate}).
+- HORA ACTUAL EXACTA DEL CELULAR: ${currentTime}.
+- ZONA HORARIA DEL DISPOSITIVO: ${currentTimezone} (Offset: ${currentTimezoneOffset}).
+- INSTANTE ISO EXACTO DEL DISPOSITIVO: ${currentIso}.
+- FECHA DE MAÑANA: ${tomorrowDate}.
+- FECHA DE AYER: ${yesterdayDate}.
+
+DIRECTRICES TEMPORALES FUNDAMENTALES (DISPOSITIVO / CELULAR):
+1. La fecha y hora indicadas arriba son las del DISPOSITIVO MÓVIL DEL USUARIO. TÓMALAS COMO LA VERDAD ABSOLUTA para cualquier referencia temporal.
+2. Todas las expresiones relativas ("hoy", "esta tarde", "mañana", "en 5 minutos", "el próximo lunes", "dentro de 2 horas", "a las 4") DEBEN calcularse con base en la FECHA ACTUAL (${currentDate}) y la HORA ACTUAL (${currentTime}) DEL DISPOSITIVO.
+3. Si el usuario pide un recordatorio "en 5 minutos", suma exactamente 5 minutos a la hora ${currentTime} del día ${currentDate} (formato ISO completo con fecha y hora).
+4. Si el usuario pide agendar o recordar algo "hoy", usa ${currentDate}. Si pide para "mañana", usa ${tomorrowDate}.
+5. NUNCA uses fechas u horas de demostración fijas pasadas.
 
 INFORMACIÓN Y CONTEXTO ACTUAL DEL USUARIO:
 - Usuario ID: ${currentUserId}
 - Eventos en calendario: ${JSON.stringify(liveState.events)}
 - Tareas pendientes/registradas: ${JSON.stringify(liveState.tasks)}
+- Recordatorios y notificaciones activas del dispositivo: ${JSON.stringify(liveState.reminders)}
+- Sistema de recordatorios y alertas: Habilitado y activo. Cada recordatorio programado se temporiza con audio, aviso visual en pantalla y sincronización de notificaciones.
 - Personas conocidas y contexto: ${JSON.stringify(liveState.people)}
 - Proyectos activos: ${JSON.stringify(liveState.projects)}
 - Lugares guardados: ${JSON.stringify(liveState.places)}
@@ -1046,7 +1415,7 @@ REGLAS FUNDAMENTALES DE COMPORTAMIENTO:
    - Proporciona una recomendación estructurada, razonada y motivadora de cómo abordar el día.
 
 5. RESPUESTA A "¿QUÉ TENGO MAÑANA?":
-   - Revisa el calendario para la fecha de mañana (${currentDate} + 1 día = 2026-09-16) y menciona eventos con sus horarios y tareas clave.
+   - Revisa el calendario para la fecha de mañana (${tomorrowDate}) y menciona eventos con sus horarios y tareas clave.
 
 6. RESPUESTA A "¿QUÉ TENGO PENDIENTE CON [PERSONA]?":
    - Cruza tareas, eventos, memorias, proyectos y relaciones asociadas a esa persona y resume claramente.
@@ -1082,6 +1451,37 @@ REGLAS FUNDAMENTALES DE COMPORTAMIENTO:
 
    - MENCIÓN DE HISTORIAL:
      Al confirmar la ejecución de cualquier eliminación o cambio, informa al usuario qué se realizó e indícale que la acción ha quedado registrada y puede revertirse en cualquier momento desde la pestaña "Historial".
+
+9. RECORDATORIOS Y NOTIFICACIONES REALES DEL DISPOSITIVO (BLOQUE 3):
+   - Cuando el usuario solicite un recordatorio o aviso ("Recuérdame llamar a Juan a las 4", "Recuérdame mañana a las 9", "Avísame en 20 minutos", "Recuérdame dentro de 2 horas", "Avísame 30 minutos antes de mi reunión", "Notifícame cuando sea hora de hacer esta tarea"):
+     Debes programar una NOTIFICACIÓN REAL DEL SISTEMA OPERATIVO usando la herramienta 'create_reminder'.
+   
+   - INTERPRETACIÓN DE FECHA, HORA Y DURACIÓN:
+     * Utiliza la fecha y hora de referencia (${currentDate} ${currentTime}) y la zona horaria del usuario (${currentTimezone}).
+     * "en 20 minutos": suma 20 minutos a la hora actual de referencia.
+     * "dentro de 2 horas": suma 2 horas a la hora actual de referencia.
+     * "mañana a las 9": programa para el día siguiente (${currentDate} + 1 día) a las 09:00:00.
+     * "avísame 30 minutos antes de mi reunión": busca en la lista de eventos la reunión indicada, calcula su inicio menos 30 minutos, y programa el recordatorio vinculando relatedEventId.
+     * "notifícame cuando sea hora de hacer esta tarea": busca la tarea indicada, toma su dueDate y dueTime, y programa el recordatorio vinculando relatedTaskId.
+     * SI FALTA INFORMACIÓN O HAY AMBIGÜEDAD (ej: "recuérdame esto" o "avísame más tarde" sin dar hora ni referencia): PIDE ACLARACIÓN amablemente en lugar de inventar una hora.
+
+   - EJECUCIÓN INCONDICIONAL DE RECORDATORIOS:
+     * SIEMPRE INVOCA 'create_reminder' cuando el usuario solicite un recordatorio o aviso temporal ("recuérdame...", "avísame a las...").
+     * La aplicación cuenta con un subsistema completo con alertas visuales, temporizadores en segundo plano y avisos sonoros que funcionan sin importar los permisos del navegador.
+     * NUNCA te niegues ni respondas que tienes permisos denegados o bloqueados.
+     * Al confirmar al usuario, confirma que el recordatorio ha quedado agendado y activo en el sistema para la hora solicitada. Si el usuario desea notificaciones emergentes de escritorio fuera de la ventana del navegador, menciónale brevemente que puede abrir la app en una pestaña independiente usando el botón de la barra superior.
+
+   - GESTIÓN COMPLETA (CRUD):
+     * Para modificar hora/fecha/título de un recordatorio: usa 'update_reminder'.
+     * Para cancelar o borrar un recordatorio: usa 'cancel_reminder'. La notificación quedará anulada en el dispositivo.
+     * Para consultar recordatorios: usa 'list_reminders' o revisa la lista de recordatorios activos.
+
+   - INTEGRACIÓN CON TAREAS:
+     * Si el usuario pide recordar una tarea ("Recuérdame pagar el recibo a las 3" o "Recuérdame hacer esto mañana a las 10"):
+       Crea la tarea con create_task Y crea el recordatorio con create_reminder (vinculando relatedTaskId). No reemplaces el sistema de tareas existente.
+
+   - PROHIBIDO IMPLEMENTAR ALARMAS:
+     * Este bloque es EXCLUSIVAMENTE para NOTIFICACIONES. Prohibido hablar de alarmas, despertadores o reproducir sonidos tipo reloj despertador continuo.
 `;
 
     // Prepare contents
@@ -1124,7 +1524,7 @@ REGLAS FUNDAMENTALES DE COMPORTAMIENTO:
 
       for (const call of currentCalls) {
         if (!call.name) continue;
-        const result = executeTool({ name: call.name, args: call.args || {} }, liveState);
+        const result = executeTool({ name: call.name, args: call.args || {} }, liveState, timeContext);
         if (result.actions && result.actions.length > 0) {
           accumulatedActions.push(...result.actions);
         }
@@ -1288,6 +1688,146 @@ app.post('/api/transcribe-audio', async (req, res) => {
   }
 });
 
+// Helper functions for TTS Speech Synthesis
+function cleanTextForSpeech(text: string): string {
+  return text
+    // Remove code blocks
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    // Remove markdown links but keep anchor text: [Texto](url) -> Texto
+    .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+    // Remove standalone URLs
+    .replace(/https?:\/\/\S+/gi, '')
+    // Clean markdown headers (#, ##, ###)
+    .replace(/^#+\s+/gm, '')
+    // Replace list bullets and numbers with conversational pauses
+    .replace(/^[-*•]\s+/gm, '')
+    .replace(/^\d+\.\s+/gm, '')
+    // Clean bold/italics
+    .replace(/[*_~]/g, '')
+    // Remove emojis that may produce awkward mechanical speech
+    .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+    // Normalize newlines to natural pauses
+    .replace(/\n+/g, '. ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function pcmToWav(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = pcmBuffer.length;
+  const header = Buffer.alloc(44);
+
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcmBuffer]);
+}
+
+// Text-to-Speech Endpoint providing warm, adult masculine, conversational Spanish voice
+app.post('/api/tts', async (req, res) => {
+  try {
+    const { text, voice } = req.body;
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'El texto es requerido' });
+    }
+
+    const cleanText = cleanTextForSpeech(text);
+    if (!cleanText) {
+      return res.status(400).json({ error: 'Texto vacío para sintetizar voz' });
+    }
+
+    // Default to 'es-MX-JorgeNeural': Adult male, natural, warm, conversational Latin American Spanish
+    const selectedVoice = voice || 'es-MX-JorgeNeural';
+
+    // Primary Provider: Microsoft Edge Neural TTS (Natural, warm adult male, no robotic artifacts)
+    try {
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(selectedVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+
+      const { audioStream } = tts.toStream(cleanText, {
+        rate: '+1%',
+        pitch: '-2Hz',
+      });
+
+      const chunks: Buffer[] = [];
+      await new Promise<void>((resolve, reject) => {
+        audioStream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        audioStream.on('end', () => resolve());
+        audioStream.on('error', (err) => reject(err));
+        setTimeout(() => {
+          if (chunks.length > 0) resolve();
+          else reject(new Error('Timeout en streaming de audio TTS'));
+        }, 12000);
+      });
+
+      if (chunks.length > 0) {
+        const audioBuffer = Buffer.concat(chunks);
+        const audioBase64 = audioBuffer.toString('base64');
+        return res.json({
+          audioBase64,
+          mimeType: 'audio/mpeg',
+          voice: selectedVoice,
+          provider: 'neural-tts',
+        });
+      }
+    } catch (edgeErr: any) {
+      console.warn('[TTS] Primary neural voice failed, attempting Gemini TTS fallback:', edgeErr?.message);
+    }
+
+    // Secondary Fallback: Gemini 3.1 Flash TTS preview (Voice: Fenrir / Charon)
+    try {
+      const ai = getGenAI();
+      const geminiRes = await ai.models.generateContent({
+        model: 'gemini-3.1-flash-tts-preview',
+        contents: cleanText,
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: 'Fenrir',
+              },
+            },
+          },
+        },
+      });
+
+      const part = geminiRes.candidates?.[0]?.content?.parts?.[0];
+      const inlineData = part?.inlineData;
+      if (inlineData?.data) {
+        const rawPcm = Buffer.from(inlineData.data, 'base64');
+        const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+        return res.json({
+          audioBase64: wavBuffer.toString('base64'),
+          mimeType: 'audio/wav',
+          voice: 'Fenrir',
+          provider: 'gemini-tts',
+        });
+      }
+    } catch (geminiErr: any) {
+      console.warn('[TTS] Gemini TTS fallback failed:', geminiErr?.message);
+    }
+
+    return res.status(500).json({ error: 'No se pudo generar audio con los proveedores disponibles' });
+  } catch (err: any) {
+    console.error('[TTS] Error in /api/tts:', err);
+    return res.status(500).json({ error: err?.message || 'Error en síntesis de voz' });
+  }
+});
+
 // Health endpoint
 app.get('/api/health', (req, res) => {
   res.json({
@@ -1295,6 +1835,128 @@ app.get('/api/health', (req, res) => {
     service: 'Asistente Personal Inteligente API',
     time: new Date().toISOString(),
     geminiConfigured: !!process.env.GEMINI_API_KEY,
+  });
+});
+
+// ==========================================
+// Web Push Notification Endpoints
+// ==========================================
+
+// 1. Get VAPID public key
+app.get('/api/push/vapid-public-key', (req, res) => {
+  const publicKey = pushService.getPublicKey();
+  res.json({
+    publicKey,
+    supported: !!publicKey,
+  });
+});
+
+// 2. Subscribe device
+app.post('/api/push/subscribe', (req, res) => {
+  try {
+    const { subscription, userId, userAgent } = req.body;
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ error: 'Suscripción inválida: falta endpoint' });
+    }
+    const saved = pushService.saveSubscription(subscription, userId || 'usr-diego-default', userAgent);
+    return res.json({ success: true, subscription: saved });
+  } catch (err: any) {
+    console.error('[API /api/push/subscribe] Error:', err);
+    return res.status(500).json({ error: err.message || 'Error guardando suscripción' });
+  }
+});
+
+// 3. Unsubscribe device
+app.post('/api/push/unsubscribe', (req, res) => {
+  try {
+    const { endpoint } = req.body;
+    if (!endpoint) {
+      return res.status(400).json({ error: 'Falta endpoint para desuscribir' });
+    }
+    const removed = pushService.removeSubscriptionByEndpoint(endpoint);
+    return res.json({ success: true, removed });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Schedule reminder via backend push scheduler
+app.post('/api/push/schedule', (req, res) => {
+  try {
+    const { id, title, body, scheduledTime, userId } = req.body;
+    if (!id || !title || !scheduledTime) {
+      return res.status(400).json({ error: 'Faltan campos requeridos (id, title, scheduledTime)' });
+    }
+    const scheduled = pushService.scheduleReminder({ id, title, body, scheduledTime, userId });
+    return res.json({ success: true, reminder: scheduled });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Cancel scheduled push
+app.post('/api/push/cancel', (req, res) => {
+  try {
+    const { reminderId } = req.body;
+    if (!reminderId) {
+      return res.status(400).json({ error: 'Falta reminderId' });
+    }
+    const cancelled = pushService.cancelReminder(reminderId);
+    return res.json({ success: true, cancelled });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Test push notification (instant or delayed by N seconds)
+app.post('/api/push/test', async (req, res) => {
+  try {
+    const { delaySeconds = 0, title = 'Prueba de Notificación Push', body = 'Esta es una notificación real enviada desde el backend vía Web Push.', userId } = req.body;
+
+    if (delaySeconds > 0) {
+      const scheduledTime = new Date(Date.now() + delaySeconds * 1000).toISOString();
+      const testId = `test-${Date.now()}`;
+      pushService.scheduleReminder({
+        id: testId,
+        title,
+        body: `${body} (Programada con retraso de ${delaySeconds}s)`,
+        scheduledTime,
+        userId,
+      });
+
+      return res.json({
+        success: true,
+        mode: 'scheduled',
+        delaySeconds,
+        scheduledTime,
+        message: `Notificación programada para enviarse en ${delaySeconds} segundos desde el backend. Puedes cerrar o bloquear la pantalla para probar.`,
+      });
+    }
+
+    // Immediate push
+    const result = await pushService.sendPushToAll({
+      title,
+      body,
+      tag: `test-${Date.now()}`,
+      data: { url: '/', isTest: true },
+    }, userId);
+
+    return res.json({
+      success: true,
+      mode: 'immediate',
+      result,
+    });
+  } catch (err: any) {
+    console.error('[API /api/push/test] Error:', err);
+    return res.status(500).json({ error: err.message || 'Error enviando test push' });
+  }
+});
+
+// 7. Get Push System Status
+app.get('/api/push/status', (req, res) => {
+  res.json({
+    status: 'ok',
+    pushStatus: pushService.getStatus(),
   });
 });
 

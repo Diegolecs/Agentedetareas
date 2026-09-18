@@ -13,6 +13,7 @@ import {
   Edit3,
   Layers,
   ArrowRight,
+  Bell,
 } from 'lucide-react';
 
 interface HistoryViewProps {
@@ -90,6 +91,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ state, onUpdateState }
     if (item.entity.includes('event')) {
       return <Calendar className="w-4 h-4 text-purple-400" />;
     }
+    if (item.entity.includes('reminder') || item.actionType.includes('reminder')) {
+      return <Bell className="w-4 h-4 text-sky-400" />;
+    }
     return <Sparkles className="w-4 h-4 text-cyan-400" />;
   };
 
@@ -103,37 +107,40 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ state, onUpdateState }
     if (item.actionType === 'delete_all_tasks' || item.actionType === 'delete_all_events') {
       return { text: 'Eliminación masiva', color: 'bg-rose-950/80 text-rose-300 border-rose-800/60' };
     }
-    if (item.actionType.startsWith('delete')) {
-      return { text: 'Eliminación', color: 'bg-rose-950/60 text-rose-300 border-rose-900/40' };
+    if (item.actionType.startsWith('delete') || item.actionType === 'cancel_reminder') {
+      return { text: 'Eliminación / Cancelado', color: 'bg-rose-950/60 text-rose-300 border-rose-900/40' };
     }
     if (item.actionType.startsWith('update')) {
       return { text: 'Modificación', color: 'bg-amber-950/60 text-amber-300 border-amber-800/50' };
+    }
+    if (item.entity.includes('reminder') || item.actionType.includes('reminder')) {
+      return { text: 'Recordatorio Real', color: 'bg-sky-950/80 text-sky-300 border-sky-800/60' };
     }
     return { text: 'Creación', color: 'bg-indigo-950/60 text-indigo-300 border-indigo-800/50' };
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-hidden">
+    <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-hidden w-full max-w-full">
       {/* Top Header */}
-      <div className="p-4 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
-        <div>
+      <div className="p-3.5 sm:p-4 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 shrink-0 w-full">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-indigo-950/80 text-indigo-400 border border-indigo-800/40">
+            <div className="p-1.5 rounded-lg bg-indigo-950/80 text-indigo-400 border border-indigo-800/40 shrink-0">
               <History className="w-5 h-5" />
             </div>
-            <h2 className="text-base font-bold text-white tracking-tight">Historial de Acciones</h2>
+            <h2 className="text-base font-bold text-white tracking-tight truncate">Historial de Acciones</h2>
           </div>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-slate-400 mt-1 line-clamp-2 sm:line-clamp-none">
             Registro auditable de modificaciones y eliminaciones ejecutadas por el asistente con capacidad de reversión segura.
           </p>
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 max-w-full">
           <button
             onClick={() => setFilterType('all')}
             id="filter-hist-all"
-            className={`px-3 py-1 text-xs rounded-lg font-medium transition ${
+            className={`px-3 py-1 text-xs rounded-lg font-medium transition shrink-0 whitespace-nowrap ${
               filterType === 'all'
                 ? 'bg-indigo-600 text-white'
                 : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
@@ -144,7 +151,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ state, onUpdateState }
           <button
             onClick={() => setFilterType('tasks')}
             id="filter-hist-tasks"
-            className={`px-3 py-1 text-xs rounded-lg font-medium transition ${
+            className={`px-3 py-1 text-xs rounded-lg font-medium transition shrink-0 whitespace-nowrap ${
               filterType === 'tasks'
                 ? 'bg-indigo-600 text-white'
                 : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
@@ -155,7 +162,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ state, onUpdateState }
           <button
             onClick={() => setFilterType('events')}
             id="filter-hist-events"
-            className={`px-3 py-1 text-xs rounded-lg font-medium transition ${
+            className={`px-3 py-1 text-xs rounded-lg font-medium transition shrink-0 whitespace-nowrap ${
               filterType === 'events'
                 ? 'bg-indigo-600 text-white'
                 : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
@@ -166,7 +173,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ state, onUpdateState }
           <button
             onClick={() => setFilterType('combined')}
             id="filter-hist-combined"
-            className={`px-3 py-1 text-xs rounded-lg font-medium transition ${
+            className={`px-3 py-1 text-xs rounded-lg font-medium transition shrink-0 whitespace-nowrap ${
               filterType === 'combined'
                 ? 'bg-indigo-600 text-white'
                 : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
@@ -259,33 +266,33 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ state, onUpdateState }
                 </div>
 
                 {/* Description */}
-                <div className="text-sm font-semibold text-white mb-1">
+                <div className="text-sm font-semibold text-white mb-1 break-words">
                   {item.readableDescription}
                 </div>
 
                 {/* Additional context for modifications / deletions */}
                 {item.previousState && (item.previousState.tasks || item.previousState.events) && (
-                  <div className="mt-2 text-xs rounded-lg bg-slate-950/60 border border-slate-800/60 p-2.5 space-y-1.5">
+                  <div className="mt-2 text-xs rounded-lg bg-slate-950/60 border border-slate-800/60 p-2.5 space-y-1.5 overflow-hidden">
                     {/* If items were modified */}
                     {item.actionType === 'update_task' && item.previousState.tasks?.[0] && item.newState?.tasks?.[0] && (
                       <div className="space-y-1">
-                        <div className="text-slate-400 flex items-center gap-1.5">
-                          <span className="text-rose-400 font-medium">Antes:</span>
-                          <span>"{item.previousState.tasks[0].title}"</span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                        <div className="text-slate-400 flex items-center gap-1.5 flex-wrap">
+                          <span className="text-rose-400 font-medium shrink-0">Antes:</span>
+                          <span className="break-words">"{item.previousState.tasks[0].title}"</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 shrink-0">
                             {item.previousState.tasks[0].priority}
                           </span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 shrink-0">
                             {item.previousState.tasks[0].status}
                           </span>
                         </div>
-                        <div className="text-slate-300 flex items-center gap-1.5">
-                          <span className="text-emerald-400 font-medium">Después:</span>
-                          <span>"{item.newState.tasks[0].title}"</span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                        <div className="text-slate-300 flex items-center gap-1.5 flex-wrap">
+                          <span className="text-emerald-400 font-medium shrink-0">Después:</span>
+                          <span className="break-words">"{item.newState.tasks[0].title}"</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 shrink-0">
                             {item.newState.tasks[0].priority}
                           </span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 shrink-0">
                             {item.newState.tasks[0].status}
                           </span>
                         </div>

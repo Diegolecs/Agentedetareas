@@ -56,13 +56,25 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   // Month navigation cursor (defaults to current date's year and month)
   const [currentYear, setCurrentYear] = useState(() => {
-    const parts = (currentDate || '2026-09-15').split('-');
-    return parseInt(parts[0], 10) || 2026;
+    const parts = (currentDate || new Date().toISOString().split('T')[0]).split('-');
+    return parseInt(parts[0], 10) || new Date().getFullYear();
   });
   const [currentMonth, setCurrentMonth] = useState(() => {
-    const parts = (currentDate || '2026-09-15').split('-');
-    return parseInt(parts[1], 10) - 1 || 8; // 0-indexed (8 = September)
+    const parts = (currentDate || new Date().toISOString().split('T')[0]).split('-');
+    return parseInt(parts[1], 10) - 1 || new Date().getMonth();
   });
+
+  // Sync when currentDate changes from device or switcher
+  React.useEffect(() => {
+    if (currentDate) {
+      setSelectedDate(currentDate);
+      const parts = currentDate.split('-');
+      if (parts.length === 3) {
+        setCurrentYear(parseInt(parts[0], 10));
+        setCurrentMonth(parseInt(parts[1], 10) - 1);
+      }
+    }
+  }, [currentDate]);
 
   // New event form state
   const [newTitle, setNewTitle] = useState('');

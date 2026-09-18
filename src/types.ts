@@ -51,6 +51,23 @@ export interface Task {
   completedAt?: string;
 }
 
+export type ReminderStatus = 'scheduled' | 'triggered' | 'delivered' | 'cancelled' | 'permission_denied';
+
+export interface Reminder {
+  id: string;
+  userId?: string;
+  title: string;
+  scheduledTime: string; // ISO 8601 string: e.g. "2026-09-15T16:00:00.000Z"
+  displayTime?: string; // e.g. "15/09/2026 16:00"
+  status: ReminderStatus;
+  taskId?: string; // Related task ID if this reminder is linked to a task
+  eventId?: string; // Related calendar event ID if linked to a meeting/event
+  notes?: string;
+  deliveredAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Person {
   id: string;
   name: string;
@@ -104,7 +121,21 @@ export interface Relationship {
 }
 
 export interface ActionExecuted {
-  type: 'create_event' | 'update_event' | 'delete_event' | 'create_task' | 'update_task' | 'create_memory' | 'create_person' | 'create_project' | 'create_relationship' | 'general';
+  type:
+    | 'create_event'
+    | 'update_event'
+    | 'delete_event'
+    | 'create_task'
+    | 'update_task'
+    | 'delete_task'
+    | 'create_reminder'
+    | 'update_reminder'
+    | 'cancel_reminder'
+    | 'create_memory'
+    | 'create_person'
+    | 'create_project'
+    | 'create_relationship'
+    | 'general';
   label: string;
   details: string;
 }
@@ -126,6 +157,9 @@ export type ActionEntity =
   | 'events_multiple'
   | 'events_all'
   | 'tasks_and_events_all'
+  | 'reminder'
+  | 'reminders_multiple'
+  | 'reminders_all'
   | 'memory'
   | 'person'
   | 'project'
@@ -144,6 +178,9 @@ export type ActionType =
   | 'delete_multiple_events'
   | 'delete_all_events'
   | 'delete_all_tasks_and_events'
+  | 'create_reminder'
+  | 'update_reminder'
+  | 'cancel_reminder'
   | 'revert_action'
   | 'create_memory'
   | 'create_person'
@@ -155,6 +192,7 @@ export type ActionStatus = 'applied' | 'reverted' | 'failed';
 export interface ActionHistorySnapshot {
   tasks?: Task[];
   events?: CalendarEvent[];
+  reminders?: Reminder[];
   memories?: MemoryItem[];
 }
 
@@ -184,6 +222,7 @@ export interface ActionHistoryItem {
 export interface AssistantState {
   events: CalendarEvent[];
   tasks: Task[];
+  reminders?: Reminder[];
   people: Person[];
   projects: Project[];
   places: Place[];

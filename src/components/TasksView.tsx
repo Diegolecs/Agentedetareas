@@ -46,6 +46,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
   const [newPerson, setNewPerson] = useState('');
   const [newProject, setNewProject] = useState('');
 
+  useEffect(() => {
+    setNewDueDate(currentDate);
+  }, [currentDate]);
+
   // 30-day retention rule: auto-archive tasks completed older than 30 days
   useEffect(() => {
     if (onArchiveCompletedTasks && actionHistory) {

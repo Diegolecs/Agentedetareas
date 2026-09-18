@@ -1,0 +1,12 @@
+[
+  {
+    "id": "test-123",
+    "userId": "usr-diego-default",
+    "title": "Recordatorio de prueba",
+    "body": "Prueba técnica",
+    "scheduledTime": "2026-09-18T10:45:00Z",
+    "status": "cancelled",
+    "attempts": 0,
+    "createdAt": "2026-09-18T10:30:49.759Z"
+  }
+]

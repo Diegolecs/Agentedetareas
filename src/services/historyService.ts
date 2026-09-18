@@ -4,10 +4,12 @@ import {
   ActionType,
   AssistantState,
   CalendarEvent,
+  Reminder,
   Task,
 } from '../types';
 import { TaskService } from './taskService';
 import { CalendarService } from './calendarService';
+import { notificationService } from './notificationService';
 
 export function formatDisplayDate(isoString: string): string {
   try {
@@ -102,12 +104,54 @@ export class HistoryService {
 
     let updatedTasks = [...currentState.tasks];
     let updatedEvents = [...currentState.events];
+    let updatedReminders = [...(currentState.reminders || [])];
     let revertSummary = '';
 
     const prev = targetAction.previousState;
     const nxt = targetAction.newState;
 
     switch (targetAction.actionType) {
+      case 'create_reminder': {
+        const createdId = targetAction.entityId || nxt?.reminders?.[0]?.id;
+        if (createdId) {
+          updatedReminders = updatedReminders.filter((r) => r.id !== createdId);
+          notificationService.cancelReminderInBackend(createdId);
+          revertSummary = 'Se canceló el recordatorio creado por el asistente.';
+        }
+        break;
+      }
+
+      case 'update_reminder': {
+        const prevRem = prev?.reminders?.[0];
+        if (prevRem) {
+          updatedReminders = updatedReminders.map((r) => (r.id === prevRem.id ? prevRem : r));
+          if (prevRem.status === 'scheduled') {
+            notificationService.scheduleReminderInBackend(prevRem);
+          } else {
+            notificationService.cancelReminderInBackend(prevRem.id);
+          }
+          revertSummary = `Se restauró el recordatorio "${prevRem.title}".`;
+        }
+        break;
+      }
+
+      case 'cancel_reminder': {
+        const remToRestore = prev?.reminders?.[0];
+        if (remToRestore) {
+          const exists = updatedReminders.some((r) => r.id === remToRestore.id);
+          if (exists) {
+            updatedReminders = updatedReminders.map((r) => (r.id === remToRestore.id ? remToRestore : r));
+          } else {
+            updatedReminders.push(remToRestore);
+          }
+          if (remToRestore.status === 'scheduled') {
+            notificationService.scheduleReminderInBackend(remToRestore);
+          }
+          revertSummary = `Se reactivó el recordatorio "${remToRestore.title}".`;
+        }
+        break;
+      }
+
       case 'delete_task':
       case 'delete_multiple_tasks':
       case 'delete_all_tasks': {
@@ -250,6 +294,7 @@ export class HistoryService {
       ...currentState,
       tasks: updatedTasks,
       events: updatedEvents,
+      reminders: updatedReminders,
       actionHistory: [companionRecord, ...updatedHistory],
     };
 

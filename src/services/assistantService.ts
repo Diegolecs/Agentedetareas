@@ -1,4 +1,5 @@
 import { AssistantState, Message } from '../types';
+import { getDeviceFullContext } from '../utils/deviceDateTime';
 
 export interface ChatResponse {
   text: string;
@@ -10,16 +11,33 @@ export class AssistantService {
   static async sendMessage(
     message: string,
     currentState: AssistantState,
-    currentDate = '2026-09-15',
-    currentTime = '11:30'
+    overrideDate?: string,
+    overrideTime?: string
   ): Promise<ChatResponse> {
+    const devContext = getDeviceFullContext();
+    const currentDate = overrideDate || devContext.currentDate;
+    const currentTime = overrideTime || devContext.currentTime;
+    const permission = typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'default';
+    const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
+
     const payload = {
       message,
       context: {
         currentDate,
         currentTime,
+        currentTimeWithSeconds: devContext.currentTimeWithSeconds,
+        timezone: devContext.timezone,
+        timezoneOffset: devContext.timezoneOffset,
+        currentIso: devContext.currentIso,
+        weekday: devContext.weekday,
+        formattedDate: devContext.formattedDate,
+        tomorrowDate: devContext.tomorrowDate,
+        yesterdayDate: devContext.yesterdayDate,
+        isInIframe,
+        notificationPermission: permission,
         events: currentState.events,
         tasks: currentState.tasks,
+        reminders: currentState.reminders || [],
         people: currentState.people,
         projects: currentState.projects,
         places: currentState.places,
